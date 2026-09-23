@@ -583,17 +583,29 @@ export function latest(msgs: WithParts[]) {
   let user: User | undefined
   let assistant: Assistant | undefined
   let finished: Assistant | undefined
+  // A user message that already produced an assistant response is no longer
+  // pending. `finished` alone is not a reliable boundary: a command message can
+  // be re-touched (its persisted `time.created` bumped past the last finished
+  // assistant), and an interrupted task's assistant may never settle. Either
+  // makes the same compaction/subtask part surface as pending forever, which
+  // replays it on every loop iteration.
+  const responded = new Set<MessageID>()
   for (const msg of msgs) {
     const info = msg.info
     if (info.role === "user" && isAfter(info, user)) user = info
-    if (info.role === "assistant" && isAfter(info, assistant)) assistant = info
-    if (info.role === "assistant" && info.finish && isAfter(info, finished)) finished = info
+    if (info.role === "assistant") {
+      if (isAfter(info, assistant)) assistant = info
+      if (info.finish && isAfter(info, finished)) finished = info
+      responded.add(info.parentID)
+    }
   }
-  const tasks = msgs.flatMap((m) =>
-    finished && !isAfter(m.info, finished)
-      ? []
-      : m.parts.filter((p): p is CompactionPart | SubtaskPart => p.type === "compaction" || p.type === "subtask"),
-  )
+  const tasks = msgs.flatMap((m) => {
+    if (finished && !isAfter(m.info, finished)) return []
+    if (m.info.role === "user" && responded.has(m.info.id)) return []
+    return m.parts.filter(
+      (p): p is CompactionPart | SubtaskPart => p.type === "compaction" || p.type === "subtask",
+    )
+  })
   return { user, assistant, finished, tasks }
 }
 

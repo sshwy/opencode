@@ -1726,4 +1726,41 @@ describe("session.message-v2.latest", () => {
     expect(state.tasks).toHaveLength(1)
     expect(state.tasks[0]).toMatchObject({ type: "subtask", prompt: "inspect" })
   })
+
+  test("skips a task part whose message already produced an assistant response", () => {
+    // The command message was dispatched once (assistant at 150) and then
+    // re-touched, bumping its persisted creation time past the finished
+    // boundary. The old gate alone would surface the same subtask again.
+    const handled = {
+      ...assistantInfo("msg_handled", "msg_task"),
+      time: { created: 150 },
+      finish: "tool-calls",
+    } as SessionV1.Assistant
+    const replayed: SessionV1.WithParts = {
+      info: { ...userInfo("msg_task"), time: { created: 400 } },
+      parts: [
+        {
+          ...basePart("msg_task", "task"),
+          type: "subtask",
+          prompt: "inspect",
+          description: "inspect replay",
+          agent: "general",
+        },
+      ] as SessionV1.Part[],
+    }
+    const fresh: SessionV1.WithParts = {
+      info: { ...userInfo("msg_fresh"), time: { created: 450 } },
+      parts: [{ ...basePart("msg_fresh", "task2"), type: "compaction", auto: true }] as SessionV1.Part[],
+    }
+
+    const state = MessageV2.latest([
+      { info: replayed.info, parts: replayed.parts },
+      { info: handled, parts: [] },
+      { info: fresh.info, parts: fresh.parts },
+    ])
+
+    expect(state.finished?.id).toBe(handled.id)
+    expect(state.tasks).toHaveLength(1)
+    expect(state.tasks[0]).toMatchObject({ type: "compaction", auto: true })
+  })
 })

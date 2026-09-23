@@ -1016,6 +1016,41 @@ it.instance("subtask child inherits parent session external_directory allow", ()
   }),
 )
 
+it.instance("does not replay a subtask whose message already has an assistant response", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    const msg = yield* user(chat.id, "hello")
+    yield* addSubtask(chat.id, msg.id)
+
+    // A previous dispatch left an assistant response on the command message but
+    // never settled (interrupted / crashed). That response already consumed the
+    // subtask, so the loop must not dispatch it a second time.
+    const interrupted: SessionV1.Assistant = {
+      id: MessageID.ascending(),
+      role: "assistant",
+      parentID: msg.id,
+      sessionID: chat.id,
+      mode: "general",
+      agent: "general",
+      cost: 0,
+      path: { cwd: "/tmp", root: "/tmp" },
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: ref.modelID,
+      providerID: ref.providerID,
+      time: { created: Date.now() },
+    }
+    yield* sessions.updateMessage(interrupted)
+
+    yield* prompt.loop({ sessionID: chat.id })
+
+    expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    expect(yield* llm.calls).toBeGreaterThan(0)
+  }),
+)
+
 noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
   Effect.gen(function* () {
     const prompt = yield* SessionPrompt.Service
